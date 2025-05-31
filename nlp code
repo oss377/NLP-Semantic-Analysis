@@ -1,0 +1,132 @@
+import spacy
+import logging
+from typing import Dict, Tuple, Optional
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+class CompositionalMeaningExtractor:
+    def __init__(self, model_name: str = "en_core_web_sm"):
+        """Initialize the NLP model with a specified model name."""
+        try:
+            self.nlp = spacy.load(model_name)
+            logger.info(f"Successfully loaded spaCy model: {model_name}")
+        except Exception as e:
+            logger.error(f"Failed to load spaCy model: {e}")
+            raise
+
+    def extract_svo(self, sentence: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """Extract subject, verb, and object from a sentence with enhanced dependency parsing."""
+        try:
+            doc = self.nlp(sentence)
+            subject = None
+            verb = None
+            obj = None
+
+            for token in doc:
+                # Identify main verb (ROOT, VERB)
+                if token.dep_ == "ROOT" and token.pos_ == "VERB":
+                    verb = token.lemma_  # Use lemma for normalized verb form
+                    logger.info(f"Identified verb: {verb}")
+
+                    # Find subject (nsubj or nsubjpass for passive sentences)
+                    for child in token.children:
+                        if child.dep_ in ("nsubj", "nsubjpass"):
+                            # Include compound nouns (e.g., "The big dog")
+                            subject = self._get_compound_phrase(child)
+                            logger.info(f"Identified subject: {subject}")
+                        # Find object (dobj or pobj for prepositional objects)
+                        if child.dep_ in ("dobj", "pobj"):
+                            obj = self._get_compound_phrase(child)
+                            logger.info(f"Identified object: {obj}")
+
+            if not all([subject, verb, obj]):
+                logger.warning(f"Incomplete SVO structure in sentence: {sentence}")
+                return None, None, None
+
+            return subject, verb, obj
+
+        except Exception as e:
+            logger.error(f"Error processing sentence '{sentence}': {e}")
+            return None, None, None
+
+    def _get_compound_phrase(self, token: spacy.tokens.Token) -> str:
+        """Extract compound phrases (e.g., 'The big dog') for a token."""
+        compound = []
+        for t in token.subtree:
+            if t.dep_ in ("compound", "amod", "det") or t == token:
+                compound.append(t.text)
+        return " ".join(compound) if compound else token.text
+
+    def get_logical_representation(self, subject: Optional[str], verb: Optional[str], object_: Optional[str]) -> Optional[str]:
+        """Generate a logical representation with additional semantic roles."""
+        if all([subject, verb, object_]):
+            logical_form = f"{verb}({subject}, {object_})"
+            logger.info(f"Logical representation: {logical_form}")
+            return logical_form
+        else:
+            logger.warning("Cannot generate logical representation due to missing components.")
+            return None
+
+    def extract_entities(self, sentence: str) -> Dict[str, list]:
+        """Extract named entities from the sentence."""
+        try:
+            doc = self.nlp(sentence)
+            entities = {"PERSON": [], "ORG": [], "GPE": [], "OTHER": []}
+            for ent in doc.ents:
+                if ent.label_ in entities:
+                    entities[ent.label_].append(ent.text)
+                else:
+                    entities["OTHER"].append(ent.text)
+            logger.info(f"Extracted entities: {entities}")
+            return entities
+        except Exception as e:
+            logger.error(f"Error extracting entities from '{sentence}': {e}")
+            return {}
+
+    def process_sentence(self, sentence: str) -> Dict:
+        """Process a sentence to extract SVO, logical representation, and entities."""
+        logger.info(f"Processing sentence: {sentence}")
+        subject, verb, obj = self.extract_svo(sentence)
+        logical_form = self.get_logical_representation(subject, verb, obj)
+        entities = self.extract_entities(sentence)
+        return {
+            "sentence": sentence,
+            "subject": subject,
+            "verb": verb,
+            "object": obj,
+            "logical_form": logical_form,
+            "entities": entities
+        }
+
+    def batch_process(self, sentences: list) -> list:
+        """Process multiple sentences and return results."""
+        return [self.process_sentence(sentence) for sentence in sentences]
+
+def main():
+    """Main function to demonstrate the Compositional Meaning Extractor."""
+    extractor = CompositionalMeaningExtractor()
+    
+    # Extended test sentences with varied structures
+    sentences = [
+        "The big cat chased the small dog in the park.",
+        "Mary quickly ate a juicy apple.",
+        "The young boy kicked the red ball.",
+        "This is not a valid sentence.",  # Non-SVO sentence
+        "Elon Musk founded SpaceX in 2002.",
+        "The book was read by Alice.",  # Passive voice
+        "A group of tourists visited New York City."
+    ]
+    
+    results = extractor.batch_process(sentences)
+    
+    for result in results:
+        print("\nResult:")
+        print(f"Sentence: {result['sentence']}")
+        print(f"Subject: {result['subject']}")
+        print(f"Verb: {result['verb']}")
+        print(f"Object: {result['object']}")
+        print(f"Logical Form: {result['logical_form']}")
+if __name__ == "__main__":
+    main()
